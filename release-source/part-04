@@ -1,1 +1,181 @@
-&& false !== mb_strpos( $value, '行政地図' ) ) { $score = max( $score, 95 ); } if ( false !== mb_strpos( $value, self::normalize_map_text( $short ) ) && false !== mb_strpos( $value, '行政図' ) ) { $score = max( $score, 85 ); } if ( false !== mb_strpos( $value, self::normalize_map_text( $short ) ) && false !== mb_strpos( $value, '地図' ) ) { $score = max( $score, 60 ); } } if ( $score > $best_score ) { $best_score = $score; $best_id = $id; } } if ( ! $best_id || $best_score < 60 ) { return array( 'area' => $area, 'found' => false, 'media_id' => 0, 'title' => '', 'url' => '', 'message' => $area . 'に対応する行政地図がメディアライブラリで見つかりませんでした。', ); } $url = wp_get_attachment_image_url( $best_id, 'full' ); if ( ! $url ) { return array( 'area' => $area, 'found' => false, 'media_id' => 0, 'title' => '', 'url' => '', 'message' => $area . 'の行政地図候補は見つかりましたが、画像URLを取得できませんでした。', ); } return array( 'area' => $area, 'found' => true, 'media_id' => $best_id, 'title' => get_the_title( $best_id ), 'url' => $url, 'message' => 'メディアライブラリ内の既存画像を再利用します。', ); } private static function normalize_map_text( $text ) { $text = rawurldecode( (string) $text ); $text = preg_replace( '/\.(jpe?g|png|webp|gif)$/iu', '', $text ); $text = preg_replace( '/[\x{3000}\s_\-・･（）()【】\[\]]+/u', '', $text ); return mb_strtolower( $text, 'UTF-8' ); } private static function insert_administrative_maps( $content, $map_results ) { $figures = array(); foreach ( $map_results as $index => $result ) { $figure = ''; if ( ! empty( $result['found'] ) && ! empty( $result['media_id'] ) ) { $figure = self::build_administrative_map_figure( absint( $result['media_id'] ), sanitize_text_field( $result['area'] ?? '' ) ); } $figures[ $index ] = $figure; $numbered_placeholder = '{{ADMIN_MAP_' . ( $index + 1 ) . '}}'; $content = str_replace( $numbered_placeholder, $figure, $content ); if ( 0 === $index ) { $content = str_replace( '{{ADMIN_MAP}}', $figure, $content ); } } $content = preg_replace( '/\{\{ADMIN_MAP(?:_\d+)?\}\}/', '', $content ); if ( ! empty( $figures[0] ) && false === strpos( $content, 'yrs-administrative-map' ) ) { $patterns = array( '/<h2[^>]*>\s*今回歩いたルート\s*<\/h2>/u', '/<h2[^>]*>\s*今回の散歩ルート\s*<\/h2>/u', '/<h2[^>]*>\s*散歩ルート\s*<\/h2>/u', '/<h2[^>]*>\s*今回歩いた場所\s*<\/h2>/u', '/<h2[^>]*>\s*今回いくところ\s*<\/h2>/u', ); $inserted = false; foreach ( $patterns as $pattern ) { if ( preg_match( $pattern, $content ) ) { $content = preg_replace( $pattern, $figures[0] . "\n\n$0", $content, 1 ); $inserted = true; break; } } if ( ! $inserted ) { $content = $figures[0] . "\n\n" . $content; } } return $content; } private static function build_administrative_map_figure( $media_id, $area ) { $src = wp_get_attachment_image_url( $media_id, 'full' ); if ( ! $src ) { return ''; } $alt = get_post_meta( $media_id, '_wp_attachment_image_alt', true ); if ( '' === trim( (string) $alt ) ) { $alt = $area . 'の行政地図'; } $caption = wp_get_attachment_caption( $media_id ); $html = '<figure class="wp-block-image size-full yrs-administrative-map">'; $html .= '<img src="' . esc_url( $src ) . '" alt="' . esc_attr( $alt ) . '" class="wp-image-' . absint( $media_id ) . '">'; if ( $caption ) { $html .= '<figcaption class="wp-element-caption">' . esc_html( $caption ) . '</figcaption>'; } $html .= '</figure>'; return $html; } private static function build_timewalk_block( $url ) { return "\n\n<!-- wp:heading -->\n<h2 class=\"wp-block-heading\">今回利用したTimeWalk</h2>\n<!-- /wp:heading -->\n\n<!-- wp:paragraph -->\n<p>今回の街歩きでは、現在地の近くにある歴史スポットを探せる街歩きWebアプリ「TimeWalk」を利用しました。</p>\n<!-- /wp:paragraph -->\n\n<!-- wp:buttons -->\n<div class=\"wp-block-buttons\"><!-- wp:button -->\n<div class=\"wp-block-button\"><a class=\"wp-block-button__link wp-element-button\" href=\"" . esc_url( $url ) . "\">今回のTimeWalkを開く</a></div>\n<!-- /wp:button --></div>\n<!-- /wp:buttons -->\n"; } private static function set_tags( $post_id, $tags ) { if ( ! is_array( $tags ) ) { return; } $clean = array(); foreach ( array_slice( $tags, 0, 20 ) as $tag ) { $tag = sanitize_text_field( $tag ); if ( '' !== $tag ) { $clean[] = $tag; } } if ( ! empty( $clean ) ) { wp_set_post_tags( $post_id, $clean, false ); } } private static function import_image( $file_ref, $post_id, $image_meta, $index = 0 ) { if ( ! is_array( $file_ref ) ) { return new WP_Error( 'yrs_bad_file_ref', '画像情報の形式が正しくありません。' ); } $url = esc_url_raw( $file_ref['download_link'] ?? '' ); if ( ! $url || ! self::is_allowed_download_url( $url ) ) { return new WP_Error( 'yrs_bad_image_url', '許可されていない画像URLです。' ); } require_once ABSPATH . 'wp-admin/includes/file.php'; re
+=> $image_results,
+                'administrative_maps' => $administrative_maps,
+                'edit_url'    => admin_url( 'post.php?post=' . $post_id . '&action=edit' ),
+                'preview_url' => get_preview_post_link( $post_id ),
+                'permalink'   => get_permalink( $post_id ),
+            )
+        );
+    }
+
+    private static function normalize_administrative_areas( $payload ) {
+        $areas = array();
+
+        if ( ! empty( $payload['administrative_areas'] ) && is_array( $payload['administrative_areas'] ) ) {
+            $areas = $payload['administrative_areas'];
+        } elseif ( ! empty( $payload['administrative_area'] ) ) {
+            $areas = array( $payload['administrative_area'] );
+        }
+
+        $clean = array();
+        foreach ( array_slice( $areas, 0, 3 ) as $area ) {
+            $area = sanitize_text_field( $area );
+            $area = preg_replace( '/[\x{3000}\s]+/u', '', $area );
+            if ( '' !== $area && ! in_array( $area, $clean, true ) ) {
+                $clean[] = $area;
+            }
+        }
+
+        return $clean;
+    }
+
+    private static function find_administrative_map( $administrative_area ) {
+        global $wpdb;
+
+        $area = sanitize_text_field( $administrative_area );
+        $area = preg_replace( '/[\x{3000}\s]+/u', '', $area );
+        if ( '' === $area ) {
+            return array(
+                'area'    => '',
+                'found'   => false,
+                'media_id'=> 0,
+                'title'   => '',
+                'url'     => '',
+                'message' => '行政区域名が空です。',
+            );
+        }
+
+        $short = preg_replace( '/^(東京都|北海道|京都府|大阪府|.{2,3}県)/u', '', $area );
+        if ( '' === $short ) {
+            $short = $area;
+        }
+
+        $like_area  = '%' . $wpdb->esc_like( $area ) . '%';
+        $like_short = '%' . $wpdb->esc_like( $short ) . '%';
+        $like_map   = '%' . $wpdb->esc_like( '行政地図' ) . '%';
+        $like_map2  = '%' . $wpdb->esc_like( '行政図' ) . '%';
+
+        $sql = $wpdb->prepare(
+            "SELECT DISTINCT p.ID
+             FROM {$wpdb->posts} p
+             LEFT JOIN {$wpdb->postmeta} pm
+               ON p.ID = pm.post_id AND pm.meta_key = '_wp_attached_file'
+             WHERE p.post_type = 'attachment'
+               AND p.post_status = 'inherit'
+               AND p.post_mime_type LIKE 'image/%%'
+               AND (
+                    p.post_title LIKE %s OR p.post_name LIKE %s OR pm.meta_value LIKE %s
+                    OR p.post_title LIKE %s OR p.post_name LIKE %s OR pm.meta_value LIKE %s
+               )
+               AND (
+                    p.post_title LIKE %s OR p.post_name LIKE %s OR pm.meta_value LIKE %s
+                    OR p.post_title LIKE %s OR p.post_name LIKE %s OR pm.meta_value LIKE %s
+               )
+             ORDER BY p.post_date DESC
+             LIMIT 100",
+            $like_area, $like_area, $like_area,
+            $like_short, $like_short, $like_short,
+            $like_map, $like_map, $like_map,
+            $like_map2, $like_map2, $like_map2
+        );
+
+        $ids = $wpdb->get_col( $sql );
+
+        // Fallback: some old attachments may have only the municipality and "地図" in their title.
+        if ( empty( $ids ) ) {
+            $like_plain_map = '%' . $wpdb->esc_like( '地図' ) . '%';
+            $sql = $wpdb->prepare(
+                "SELECT DISTINCT p.ID
+                 FROM {$wpdb->posts} p
+                 LEFT JOIN {$wpdb->postmeta} pm
+                   ON p.ID = pm.post_id AND pm.meta_key = '_wp_attached_file'
+                 WHERE p.post_type = 'attachment'
+                   AND p.post_status = 'inherit'
+                   AND p.post_mime_type LIKE 'image/%%'
+                   AND (
+                        p.post_title LIKE %s OR p.post_name LIKE %s OR pm.meta_value LIKE %s
+                   )
+                   AND (
+                        p.post_title LIKE %s OR p.post_name LIKE %s OR pm.meta_value LIKE %s
+                   )
+                 ORDER BY p.post_date DESC
+                 LIMIT 100",
+                $like_short, $like_short, $like_short,
+                $like_plain_map, $like_plain_map, $like_plain_map
+            );
+            $ids = $wpdb->get_col( $sql );
+        }
+
+        $best_id    = 0;
+        $best_score = -1;
+        $target_exact = self::normalize_map_text( $area . '行政地図' );
+        $target_short = self::normalize_map_text( $short . '行政地図' );
+
+        foreach ( $ids as $id ) {
+            $id       = absint( $id );
+            $title    = get_the_title( $id );
+            $slug     = get_post_field( 'post_name', $id );
+            $attached = get_post_meta( $id, '_wp_attached_file', true );
+            $basename = $attached ? pathinfo( rawurldecode( wp_basename( $attached ) ), PATHINFO_FILENAME ) : '';
+
+            $values = array(
+                self::normalize_map_text( $title ),
+                self::normalize_map_text( $slug ),
+                self::normalize_map_text( $basename ),
+            );
+
+            $score = 0;
+            foreach ( $values as $value ) {
+                if ( '' === $value ) {
+                    continue;
+                }
+                if ( $value === $target_exact ) {
+                    $score = max( $score, 120 );
+                }
+                if ( $value === $target_short ) {
+                    $score = max( $score, 110 );
+                }
+                if ( false !== mb_strpos( $value, self::normalize_map_text( $area ) ) && false !== mb_strpos( $value, '行政地図' ) ) {
+                    $score = max( $score, 100 );
+                }
+                if ( false !== mb_strpos( $value, self::normalize_map_text( $short ) ) && false !== mb_strpos( $value, '行政地図' ) ) {
+                    $score = max( $score, 95 );
+                }
+                if ( false !== mb_strpos( $value, self::normalize_map_text( $short ) ) && false !== mb_strpos( $value, '行政図' ) ) {
+                    $score = max( $score, 85 );
+                }
+                if ( false !== mb_strpos( $value, self::normalize_map_text( $short ) ) && false !== mb_strpos( $value, '地図' ) ) {
+                    $score = max( $score, 60 );
+                }
+            }
+
+            if ( $score > $best_score ) {
+                $best_score = $score;
+                $best_id    = $id;
+            }
+        }
+
+        if ( ! $best_id || $best_score < 60 ) {
+            return array(
+                'area'     => $area,
+                'found'    => false,
+                'media_id' => 0,
+                'title'    => '',
+                'url'      => '',
+                'message'  => $area . 'に対応する行政地図がメディアライブラリで見つかりませんでした。',
+            );
+        }
+
+        $url = wp_get_attachment_image_url( $best_id, 'full' );
+        if ( ! $url ) {
+            return array(
+                'area'     => $area,
+                'found'    => false,
+                'media_id' => 0,
+                'title'    => '',
+                'url'      => '',
+                'message'  => $area . 'の行政地図候補は見つかりましたが、画像URLを取得できませんでした。',
+            );
+        }
+
+        return array(
+            'area'     
