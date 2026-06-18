@@ -1,1 +1,160 @@
-quire_once ABSPATH . 'wp-admin/includes/media.php'; require_once ABSPATH . 'wp-admin/includes/image.php'; $tmp_original = download_url( $url, 20 ); if ( is_wp_error( $tmp_original ) ) { return $tmp_original; } $size = filesize( $tmp_original ); if ( false === $size || $size > self::MAX_BYTES ) { @unlink( $tmp_original ); return new WP_Error( 'yrs_image_too_large', '画像サイズが10MBを超えています。' ); } $actual_mime = wp_get_image_mime( $tmp_original ); $allowed = array( 'image/jpeg', 'image/png', 'image/webp' ); if ( ! in_array( $actual_mime, $allowed, true ) ) { @unlink( $tmp_original ); return new WP_Error( 'yrs_bad_image_type', '対応していない画像形式です: ' . ( $actual_mime ?: '不明' ) ); } $post_slug = sanitize_title( get_post_field( 'post_name', $post_id ) ); if ( '' === $post_slug ) { $post_slug = 'walking-report-' . absint( $post_id ); } $sequence = str_pad( (string) ( absint( $index ) + 1 ), 2, '0', STR_PAD_LEFT ); $filename = sanitize_file_name( $post_slug . '-' . $sequence . '.webp' ); $upload_path = $tmp_original; if ( 'image/webp' === $actual_mime ) { $dimensions = @getimagesize( $tmp_original ); if ( is_array( $dimensions ) && ( $dimensions[0] > self::MAX_IMAGE_DIMENSION || $dimensions[1] > self::MAX_IMAGE_DIMENSION ) ) { if ( ! wp_image_editor_supports( array( 'mime_type' => 'image/webp' ) ) ) { @unlink( $tmp_original ); return new WP_Error( 'yrs_webp_resize_unsupported', 'WebP画像が長辺1920pxを超えていますが、サーバー側でWebPを縮小できません。GPT側で長辺1920px以下のWebPにしてから再送してください。' ); } $editor = wp_get_image_editor( $tmp_original ); if ( is_wp_error( $editor ) ) { @unlink( $tmp_original ); return new WP_Error( 'yrs_image_editor_error', 'WebP画像を開けませんでした: ' . $editor->get_error_message() ); } $resize_result = $editor->resize( self::MAX_IMAGE_DIMENSION, self::MAX_IMAGE_DIMENSION, false ); if ( is_wp_error( $resize_result ) ) { @unlink( $tmp_original ); return new WP_Error( 'yrs_image_resize_error', 'WebP画像の縮小に失敗しました: ' . $resize_result->get_error_message() ); } $editor->set_quality( self::WEBP_QUALITY ); $tmp_dir = get_temp_dir(); $tmp_resized = trailingslashit( $tmp_dir ) . wp_unique_filename( $tmp_dir, $filename ); $save_result = $editor->save( $tmp_resized, 'image/webp' ); @unlink( $tmp_original ); if ( is_wp_error( $save_result ) || empty( $save_result['path'] ) || ! file_exists( $save_result['path'] ) ) { @unlink( $tmp_resized ); $message = is_wp_error( $save_result ) ? $save_result->get_error_message() : '変換後ファイルがありません。'; return new WP_Error( 'yrs_webp_resize_error', 'WebP画像の縮小保存に失敗しました: ' . $message ); } if ( 'image/webp' !== wp_get_image_mime( $save_result['path'] ) ) { @unlink( $save_result['path'] ); return new WP_Error( 'yrs_not_real_webp', '縮小後の画像が実際のWebP形式ではありませんでした。' ); } $upload_path = $save_result['path']; } } else { if ( ! wp_image_editor_supports( array( 'mime_type' => 'image/webp' ) ) ) { @unlink( $tmp_original ); return new WP_Error( 'yrs_webp_conversion_unsupported', 'このサーバーのWordPress画像処理ではJPEG/PNGをWebPへ変換できません。GPT側でWebPへ変換した画像を送信してください。' ); } $editor = wp_get_image_editor( $tmp_original ); if ( is_wp_error( $editor ) ) { @unlink( $tmp_original ); return new WP_Error( 'yrs_image_editor_error', '画像変換を開始できませんでした: ' . $editor->get_error_message() ); } $dimensions = $editor->get_size(); if ( is_array( $dimensions ) && ( $dimensions['width'] > self::MAX_IMAGE_DIMENSION || $dimensions['height'] > self::MAX_IMAGE_DIMENSION ) ) { $resize_result = $editor->resize( self::MAX_IMAGE_DIMENSION, self::MAX_IMAGE_DIMENSION, false ); if ( is_wp_error( $resize_result ) ) { @unlink( $tmp_original ); return new WP_Error( 'yrs_image_resize_error', '画像の縮小に失敗しました: ' . $resize_result->get_error_message() ); } } $editor->set_quality( self::WEBP_QUALITY ); $tmp_dir = get_temp_dir(); $tmp_webp = trailingslashit( $tmp_dir ) . wp_unique_filename( $tmp_dir, $filename ); $save_result = $editor->save( $tmp_webp, 'image/webp' ); @unlink( $tmp_original ); if ( is_wp_error( $save_result ) || empty( $save_result['path'] ) || ! file_exists( $save_result['path'] ) ) { @unlink( $tmp_webp ); $message = is_wp_error( $save_result ) ? $save_result->get_error_message() : '変換後ファイルがありません。'; return new WP_Error( 'yrs_webp_conversion_error', 'WebPへの変換に失敗しました: ' . $message ); } if ( 'image/webp' !== wp_get_image_mime( $save_result['path'] ) ) { @unlink( $save_result['path'] ); return new WP_Error( 'yrs_not_real_webp', 'サーバーがWebP変換要求をJPEG/PNGとして保存したため、画像の登録を中止しました。GPT側でWebPへ変換した画像を送信してください。' ); 
+ => $area,
+            'found'    => true,
+            'media_id' => $best_id,
+            'title'    => get_the_title( $best_id ),
+            'url'      => $url,
+            'message'  => 'メディアライブラリ内の既存画像を再利用します。',
+        );
+    }
+
+    private static function normalize_map_text( $text ) {
+        $text = rawurldecode( (string) $text );
+        $text = preg_replace( '/\.(jpe?g|png|webp|gif)$/iu', '', $text );
+        $text = preg_replace( '/[\x{3000}\s_\-・･（）()【】\[\]]+/u', '', $text );
+        return mb_strtolower( $text, 'UTF-8' );
+    }
+
+    private static function insert_administrative_maps( $content, $map_results ) {
+        $figures = array();
+        foreach ( $map_results as $index => $result ) {
+            $figure = '';
+            if ( ! empty( $result['found'] ) && ! empty( $result['media_id'] ) ) {
+                $figure = self::build_administrative_map_figure( absint( $result['media_id'] ), sanitize_text_field( $result['area'] ?? '' ) );
+            }
+            $figures[ $index ] = $figure;
+            $numbered_placeholder = '{{ADMIN_MAP_' . ( $index + 1 ) . '}}';
+            $content = str_replace( $numbered_placeholder, $figure, $content );
+            if ( 0 === $index ) {
+                $content = str_replace( '{{ADMIN_MAP}}', $figure, $content );
+            }
+        }
+
+        // Remove unmatched placeholders so they never appear in the published article.
+        $content = preg_replace( '/\{\{ADMIN_MAP(?:_\d+)?\}\}/', '', $content );
+
+        // Fallback placement: if the GPT omitted the placeholder, place the first map immediately before the route section.
+        if ( ! empty( $figures[0] ) && false === strpos( $content, 'yrs-administrative-map' ) ) {
+            $patterns = array(
+                '/<h2[^>]*>\s*今回歩いたルート\s*<\/h2>/u',
+                '/<h2[^>]*>\s*今回の散歩ルート\s*<\/h2>/u',
+                '/<h2[^>]*>\s*散歩ルート\s*<\/h2>/u',
+                '/<h2[^>]*>\s*今回歩いた場所\s*<\/h2>/u',
+                '/<h2[^>]*>\s*今回いくところ\s*<\/h2>/u',
+            );
+            $inserted = false;
+            foreach ( $patterns as $pattern ) {
+                if ( preg_match( $pattern, $content ) ) {
+                    $content = preg_replace( $pattern, $figures[0] . "\n\n$0", $content, 1 );
+                    $inserted = true;
+                    break;
+                }
+            }
+            if ( ! $inserted ) {
+                $content = $figures[0] . "\n\n" . $content;
+            }
+        }
+
+        return $content;
+    }
+
+    private static function build_administrative_map_figure( $media_id, $area ) {
+        $src = wp_get_attachment_image_url( $media_id, 'full' );
+        if ( ! $src ) {
+            return '';
+        }
+
+        $alt = get_post_meta( $media_id, '_wp_attachment_image_alt', true );
+        if ( '' === trim( (string) $alt ) ) {
+            $alt = $area . 'の行政地図';
+        }
+
+        $caption = wp_get_attachment_caption( $media_id );
+        $html  = '<figure class="wp-block-image size-full yrs-administrative-map">';
+        $html .= '<img src="' . esc_url( $src ) . '" alt="' . esc_attr( $alt ) . '" class="wp-image-' . absint( $media_id ) . '">';
+        if ( $caption ) {
+            $html .= '<figcaption class="wp-element-caption">' . esc_html( $caption ) . '</figcaption>';
+        }
+        $html .= '</figure>';
+        return $html;
+    }
+
+    private static function build_timewalk_block( $url ) {
+        return "\n\n<!-- wp:heading -->\n<h2 class=\"wp-block-heading\">今回利用したTimeWalk</h2>\n<!-- /wp:heading -->\n\n<!-- wp:paragraph -->\n<p>今回の街歩きでは、現在地の近くにある歴史スポットを探せる街歩きWebアプリ「TimeWalk」を利用しました。</p>\n<!-- /wp:paragraph -->\n\n<!-- wp:buttons -->\n<div class=\"wp-block-buttons\"><!-- wp:button -->\n<div class=\"wp-block-button\"><a class=\"wp-block-button__link wp-element-button\" href=\"" . esc_url( $url ) . "\">今回のTimeWalkを開く</a></div>\n<!-- /wp:button --></div>\n<!-- /wp:buttons -->\n";
+    }
+
+    private static function set_tags( $post_id, $tags ) {
+        if ( ! is_array( $tags ) ) {
+            return;
+        }
+        $clean = array();
+        foreach ( array_slice( $tags, 0, 20 ) as $tag ) {
+            $tag = sanitize_text_field( $tag );
+            if ( '' !== $tag ) {
+                $clean[] = $tag;
+            }
+        }
+        if ( ! empty( $clean ) ) {
+            wp_set_post_tags( $post_id, $clean, false );
+        }
+    }
+
+    private static function attach_existing_media( $post_id, $media_ids, $featured_index = 0 ) {
+        $valid = array();
+        foreach ( array_slice( (array) $media_ids, 0, self::MAX_FILES ) as $index => $media_id ) {
+            $media_id = absint( $media_id );
+            if ( ! $media_id || 'attachment' !== get_post_type( $media_id ) || 0 !== strpos( (string) get_post_mime_type( $media_id ), 'image/' ) ) {
+                continue;
+            }
+            wp_update_post( array( 'ID' => $media_id, 'post_parent' => $post_id ) );
+            $valid[ $index ] = $media_id;
+        }
+        $featured_index = absint( $featured_index );
+        if ( isset( $valid[ $featured_index ] ) ) {
+            set_post_thumbnail( $post_id, $valid[ $featured_index ] );
+        } elseif ( ! empty( $valid ) ) {
+            set_post_thumbnail( $post_id, reset( $valid ) );
+        }
+        return $valid;
+    }
+
+    private static function import_image( $file_ref, $post_id, $image_meta, $index = 0, $slug_override = '' ) {
+        if ( ! is_array( $file_ref ) ) {
+            return new WP_Error( 'yrs_bad_file_ref', '画像情報の形式が正しくありません。' );
+        }
+
+        $url = esc_url_raw( $file_ref['download_link'] ?? '' );
+        if ( ! $url || ! self::is_allowed_download_url( $url ) ) {
+            return new WP_Error( 'yrs_bad_image_url', '許可されていない画像URLです。' );
+        }
+
+        require_once ABSPATH . 'wp-admin/includes/file.php';
+        require_once ABSPATH . 'wp-admin/includes/media.php';
+        require_once ABSPATH . 'wp-admin/includes/image.php';
+
+        $tmp_original = download_url( $url, 20 );
+        if ( is_wp_error( $tmp_original ) ) {
+            return $tmp_original;
+        }
+
+        $size = filesize( $tmp_original );
+        if ( false === $size || $size > self::MAX_BYTES ) {
+            @unlink( $tmp_original );
+            return new WP_Error( 'yrs_image_too_large', '画像サイズが10MBを超えています。' );
+        }
+
+        // Do not trust only the filename or API-provided MIME type. Inspect the actual file bytes.
+        $actual_mime = wp_get_image_mime( $tmp_original );
+        $allowed     = array( 'image/jpeg', 'image/png', 'image/webp' );
+        if ( ! in_array( $actual_mime, $allowed, true ) ) {
+            @unlink( $tmp_original );
+            return new WP_Error( 'yrs_bad_image_type', '対応していない画像形式です: ' . ( $actual_mime ?: '不明' ) );
+        }
+
+        $post_slug = sanitize_title( $slug_override );
+        if ( '' === $post_slug && $post_id ) {
+            $post_slug = sanitize_title( get_post_field( 'post_name', $post_id ) );
+        }
+        if ( '' === $post_slug ) {
+            $post_slug = 'walking-report-' . ( $post_id ? absint( $post_id ) : gmdate( 'Ymd-His' ) );
+        }
+        $sequence = str_pad( (string) ( a
