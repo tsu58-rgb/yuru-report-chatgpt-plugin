@@ -2,10 +2,9 @@
   "name": "ゆる歴史散歩 ChatGPT レポート投稿",
   "version": "1.4.0",
   "homepage": "https://github.com/tsu58-rgb/yuru-report-chatgpt-plugin",
-  "download_url": "https://raw.githubusercontent.com/tsu58-rgb/yuru-report-chatgpt-plugin/main/dist/yuru-report-chatgpt.zip",
+  "download_url": "https://github.com/tsu58-rgb/yuru-report-chatgpt-plugin/archive/refs/heads/main.zip",
   "requires": "6.2",
   "requires_php": "7.4",
   "description": "カスタムGPTから、画像付きの散歩イベント開催レポートをWordPressへ安全に下書き投稿する専用プラグインです。WebP画像、SEO設定、行政地図の再利用、GitHub経由の自動更新に対応します。",
-  "changelog": "<h4>1.4.0</h4><ul><li>GitHub経由の自動更新に対応</li><li>行政地図の自動検索と既存メディア再利用に対応</li><li>画像のWebP登録と英数字ファイル名を強化</li></ul>",
-  "sha256": "e7332901be95950fa0077cbf1c75dacfc7ff19b5de8a292b4e450e6b3e3d838d"
+  "changelog": "<h4>1.4.0</h4><ul><li>GitHub経由の自動更新に対応</li><li>行政地図の自動検索と既存メディア再利用に対応</li><li>画像のWebP登録と英数字ファイル名を強化</li></ul>"
 }
