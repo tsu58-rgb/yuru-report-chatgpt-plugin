@@ -2,7 +2,7 @@
 /**
  * Plugin Name: ゆる歴史散歩 ChatGPT レポート投稿
  * Description: 非公開カスタムGPTから、画像付き散歩レポートを安全に下書き投稿します。
- * Version: 1.4.0
+ * Version: 1.5.1
  * Update URI: https://github.com/tsu58-rgb/yuru-report-chatgpt-plugin
  * Author: ゆる歴史散歩会
  * Requires at least: 6.2
@@ -16,6 +16,20 @@ if ( ! defined( 'ABSPATH' ) ) {
 if ( ! defined( 'YRS_CHATGPT_REPORT_PLUGIN_FILE' ) ) {
     define( 'YRS_CHATGPT_REPORT_PLUGIN_FILE', __FILE__ );
 }
+
+/**
+ * WP External Links は公開ページでは通常どおり動かし、
+ * Gutenberg と GPT Actions が利用する REST API 応答には介入させません。
+ */
+if ( ! function_exists( 'yrs_chatgpt_report_disable_wpel_on_rest' ) ) {
+    function yrs_chatgpt_report_disable_wpel_on_rest( $apply = true ) {
+        if ( defined( 'REST_REQUEST' ) && REST_REQUEST ) {
+            return false;
+        }
+        return $apply;
+    }
+}
+add_filter( 'wpel_apply_settings', 'yrs_chatgpt_report_disable_wpel_on_rest', PHP_INT_MAX, 1 );
 
 if ( ! function_exists( 'yrs_chatgpt_report_normalize_github_source' ) ) {
     function yrs_chatgpt_report_normalize_github_source( $source, $remote_source, $upgrader, $hook_extra ) {
@@ -52,7 +66,7 @@ for ( $yrs_index = 0; $yrs_index < 8; $yrs_index++ ) {
     if ( ! is_readable( $yrs_part ) ) {
         add_action(
             'admin_notices',
-            static function () use ( $yrs_part ) {
+            static function () {
                 echo '<div class="notice notice-error"><p>ChatGPTレポート投稿プラグインの構成ファイルが不足しています。</p></div>';
             }
         );
