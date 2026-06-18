@@ -1,1 +1,154 @@
-' ), 'output_mime' => 'image/webp', 'filename_rule' => 'post-slug-01.webp', 'administrative_map_search' => true, 'administrative_map_placeholder' => '{{ADMIN_MAP}}', 'administrative_map_reuses_existing_media' => true, ) ); } public static function administrative_map( WP_REST_Request $request ) { $area = sanitize_text_field( $request->get_param( 'administrative_area' ) ); if ( '' === $area ) { return new WP_Error( 'yrs_missing_administrative_area', '行政区域名を指定してください。', array( 'status' => 400 ) ); } $result = self::find_administrative_map( $area ); return rest_ensure_response( $result ); } public static function create_report( WP_REST_Request $request ) { $payload = $request->get_json_params(); if ( ! is_array( $payload ) ) { return new WP_Error( 'yrs_invalid_json', 'JSON形式の本文が必要です。', array( 'status' => 400 ) ); } $title = sanitize_text_field( $payload['title'] ?? '' ); $content = isset( $payload['content'] ) ? wp_kses_post( $payload['content'] ) : ''; if ( '' === $title || '' === trim( wp_strip_all_tags( $content ) ) ) { return new WP_Error( 'yrs_missing_fields', 'title と content は必須です。', array( 'status' => 400 ) ); } $settings = get_option( self::OPTION_KEY, array() ); $author_id = absint( $settings['author_id'] ?? 0 ); if ( ! $author_id || ! get_user_by( 'id', $author_id ) ) { return new WP_Error( 'yrs_invalid_author', '投稿者の設定が正しくありません。', array( 'status' => 500 ) ); } $requested_status = sanitize_key( $payload['status'] ?? 'draft' ); $status = ( 'publish' === $requested_status && ! empty( $settings['allow_publish'] ) ) ? 'publish' : 'draft'; $timewalk_url = esc_url_raw( $payload['timewalk_url'] ?? '' ); if ( $timewalk_url && false === strpos( $content, $timewalk_url ) ) { $content .= self::build_timewalk_block( $timewalk_url ); } $administrative_areas = self::normalize_administrative_areas( $payload ); $administrative_maps = array(); if ( ! empty( $administrative_areas ) ) { foreach ( $administrative_areas as $area ) { $administrative_maps[] = self::find_administrative_map( $area ); } $content = self::insert_administrative_maps( $content, $administrative_maps ); } else { $content = preg_replace( '/\{\{ADMIN_MAP(?:_\d+)?\}\}/', '', $content ); } $postarr = array( 'post_title' => $title, 'post_content' => $content, 'post_excerpt' => sanitize_textarea_field( $payload['excerpt'] ?? '' ), 'post_status' => $status, 'post_type' => 'post', 'post_author' => $author_id, 'comment_status' => 'closed', 'ping_status' => 'closed', ); if ( ! empty( $payload['slug'] ) ) { $postarr['post_name'] = sanitize_title( $payload['slug'] ); } $category_id = absint( $settings['category_id'] ?? 0 ); if ( $category_id ) { $postarr['post_category'] = array( $category_id ); } $post_id = wp_insert_post( wp_slash( $postarr ), true ); if ( is_wp_error( $post_id ) ) { return $post_id; } $seo_title = sanitize_text_field( $payload['seo_title'] ?? $title ); $meta_description = sanitize_textarea_field( $payload['meta_description'] ?? '' ); update_post_meta( $post_id, 'the_page_seo_title', $seo_title ); if ( '' !== $meta_description ) { update_post_meta( $post_id, 'the_page_meta_description', $meta_description ); } if ( $timewalk_url ) { update_post_meta( $post_id, '_yrs_timewalk_url', $timewalk_url ); } if ( ! empty( $administrative_areas ) ) { update_post_meta( $post_id, '_yrs_administrative_areas', $administrative_areas ); foreach ( $administrative_maps as $map_result ) { if ( empty( $map_result['found'] ) ) { add_post_meta( $post_id, '_yrs_administrative_map_error', sanitize_text_field( $map_result['message'] ?? '行政地図が見つかりませんでした。' ) ); } } } self::set_tags( $post_id, $payload['tags'] ?? array() ); $media_ids = array(); $media_map = array(); $files = $payload['openaiFileIdRefs'] ?? array(); $meta = $payload['image_metadata'] ?? array(); if ( is_array( $files ) && ! empty( $files ) ) { $files = array_slice( $files, 0, self::MAX_FILES ); foreach ( $files as $index => $file_ref ) { $image_meta = ( isset( $meta[ $index ] ) && is_array( $meta[ $index ] ) ) ? $meta[ $index ] : array(); $media_id = self::import_image( $file_ref, $post_id, $image_meta, $index ); if ( is_wp_error( $media_id ) ) { add_post_meta( $post_id, '_yrs_image_error', $media_id->get_error_message() ); continue; } $media_ids[] = $media_id; $media_map[ $index ] = $media_id; } } $updated_content = get_post_field( 'post_content', $post_id ); if ( ! empty( $media_ids ) ) { $featured_index = isset( $payload['featured_image_index'] ) ? absint( $payload['featured_image_index'] ) : 0; if ( isset( $media_map[ $featured_index ] ) ) { set_post_thumbnail( $post_id, $media_map[ $featured_index ] ); } else { set_post_thumbnail( $post_id, $media_ids[0] ); } foreach ( $media_map as $original_index => $media_id ) { $placeholder = '{{IMAGE_' . ( $original_index + 1 ) . '}}'; $figure = self::build_image_figure( $media_id ); if ( false !== strpos( $updated_content, $placehol
+ $index ] ) ) ? $meta[ $index ] : array();
+            $result = self::import_image( $file_ref, 0, $image_meta, $index, $slug );
+            $name = is_array( $file_ref ) ? sanitize_file_name( $file_ref['name'] ?? '' ) : '';
+
+            if ( is_wp_error( $result ) ) {
+                $results[] = array(
+                    'index'         => $index,
+                    'name'          => $name,
+                    'ok'            => false,
+                    'media_id'      => 0,
+                    'url'           => '',
+                    'error_code'    => $result->get_error_code(),
+                    'error_message' => $result->get_error_message(),
+                );
+                continue;
+            }
+
+            $media_ids[] = $result;
+            $results[] = array(
+                'index'         => $index,
+                'name'          => $name,
+                'ok'            => true,
+                'media_id'      => $result,
+                'url'           => wp_get_attachment_url( $result ),
+                'error_code'    => '',
+                'error_message' => '',
+            );
+        }
+
+        $response = array(
+            'ok'                  => count( $media_ids ) === count( $files ),
+            'received_file_count' => count( $files ),
+            'successful_count'    => count( $media_ids ),
+            'failed_count'        => count( $files ) - count( $media_ids ),
+            'media_ids'           => $media_ids,
+            'results'             => $results,
+        );
+
+        return new WP_REST_Response( $response, empty( $media_ids ) ? 422 : 200 );
+    }
+
+    public static function update_report( WP_REST_Request $request ) {
+        $post_id = absint( $request['id'] );
+        $post = get_post( $post_id );
+        if ( ! $post || 'post' !== $post->post_type ) {
+            return new WP_Error( 'yrs_post_not_found', '対象の記事が見つかりません。', array( 'status' => 404 ) );
+        }
+
+        $payload = $request->get_json_params();
+        if ( ! is_array( $payload ) ) {
+            return new WP_Error( 'yrs_invalid_json', 'JSON形式の本文が必要です。', array( 'status' => 400 ) );
+        }
+
+        $postarr = array( 'ID' => $post_id );
+        if ( array_key_exists( 'title', $payload ) ) {
+            $postarr['post_title'] = sanitize_text_field( $payload['title'] );
+        }
+        if ( array_key_exists( 'content', $payload ) ) {
+            $postarr['post_content'] = wp_kses_post( $payload['content'] );
+        }
+        if ( array_key_exists( 'excerpt', $payload ) ) {
+            $postarr['post_excerpt'] = sanitize_textarea_field( $payload['excerpt'] );
+        }
+        if ( ! empty( $payload['slug'] ) ) {
+            $postarr['post_name'] = sanitize_title( $payload['slug'] );
+        }
+
+        if ( count( $postarr ) > 1 ) {
+            $updated = wp_update_post( wp_slash( $postarr ), true );
+            if ( is_wp_error( $updated ) ) {
+                return $updated;
+            }
+        }
+
+        if ( array_key_exists( 'seo_title', $payload ) ) {
+            update_post_meta( $post_id, 'the_page_seo_title', sanitize_text_field( $payload['seo_title'] ) );
+        }
+        if ( array_key_exists( 'meta_description', $payload ) ) {
+            update_post_meta( $post_id, 'the_page_meta_description', sanitize_textarea_field( $payload['meta_description'] ) );
+        }
+        if ( isset( $payload['media_ids'] ) && is_array( $payload['media_ids'] ) ) {
+            $media_map = self::attach_existing_media( $post_id, $payload['media_ids'], $payload['featured_image_index'] ?? 0 );
+            $updated_content = get_post_field( 'post_content', $post_id );
+            foreach ( $media_map as $index => $media_id ) {
+                $placeholder = '{{IMAGE_' . ( $index + 1 ) . '}}';
+                if ( false !== strpos( $updated_content, $placeholder ) ) {
+                    $updated_content = str_replace( $placeholder, self::build_image_figure( $media_id ), $updated_content );
+                }
+            }
+            $updated_content = preg_replace( '/\{\{IMAGE_\d+\}\}/', '', $updated_content );
+            wp_update_post( wp_slash( array( 'ID' => $post_id, 'post_content' => $updated_content ) ) );
+        }
+
+        return rest_ensure_response(
+            array(
+                'ok'          => true,
+                'post_id'     => $post_id,
+                'status'      => get_post_status( $post_id ),
+                'edit_url'    => admin_url( 'post.php?post=' . $post_id . '&action=edit' ),
+                'preview_url' => get_preview_post_link( $post_id ),
+                'permalink'   => get_permalink( $post_id ),
+            )
+        );
+    }
+
+    public static function trash_report( WP_REST_Request $request ) {
+        $post_id = absint( $request['id'] );
+        $post = get_post( $post_id );
+        if ( ! $post || 'post' !== $post->post_type ) {
+            return new WP_Error( 'yrs_post_not_found', '対象の記事が見つかりません。', array( 'status' => 404 ) );
+        }
+
+        $trashed = wp_trash_post( $post_id );
+        if ( ! $trashed ) {
+            return new WP_Error( 'yrs_trash_failed', '記事をゴミ箱へ移動できませんでした。', array( 'status' => 500 ) );
+        }
+
+        return rest_ensure_response( array( 'ok' => true, 'post_id' => $post_id, 'status' => 'trash' ) );
+    }
+
+    public static function create_report( WP_REST_Request $request ) {
+        $payload = $request->get_json_params();
+        if ( ! is_array( $payload ) ) {
+            return new WP_Error( 'yrs_invalid_json', 'JSON形式の本文が必要です。', array( 'status' => 400 ) );
+        }
+
+        $title   = sanitize_text_field( $payload['title'] ?? '' );
+        $content = isset( $payload['content'] ) ? wp_kses_post( $payload['content'] ) : '';
+
+        if ( '' === $title || '' === trim( wp_strip_all_tags( $content ) ) ) {
+            return new WP_Error( 'yrs_missing_fields', 'title と content は必須です。', array( 'status' => 400 ) );
+        }
+
+        $files = $payload['openaiFileIdRefs'] ?? array();
+        $media_ids_requested = $payload['media_ids'] ?? array();
+        $has_image_placeholders = (bool) preg_match( '/\{\{IMAGE_\d+\}\}/', $content );
+        $expects_images = $has_image_placeholders || ! empty( $payload['image_metadata'] ) || ! empty( $payload['expected_image_count'] );
+
+        if ( $expects_images && empty( $media_ids_requested ) && empty( $files ) ) {
+            return new WP_Error(
+                'yrs_images_required_before_post',
+                '画像付き記事ですが、画像ファイルまたはアップロード済みmedia_idsがありません。画像を先にuploadReportImagesでアップロードしてください。記事は作成されていません。',
+                array( 'status' => 400 )
+            );
+        }
+
+        $settings  = get_option( self::OPTION_KEY, array() );
+        $author_id = absint( $settings['author_id'] ?? 0 );
+        if ( ! $author_id || ! get_user_by( 'id', $author_id ) ) {
+            return new WP_Error( 'yrs_invalid_author', '投稿者の設定が正しくありません。', array( 'status' => 500 ) );
+        }
+
+        $requested_status = sanitize_key( $payload['status'] ?? 'draft' );
+        $status           = ( 'publish' === $requested_status && ! empty( $settings['allow_publish'] ) ) ? 'publish' : 'dra
