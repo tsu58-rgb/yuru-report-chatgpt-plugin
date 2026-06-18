@@ -1,1 +1,158 @@
-e_retrieve_response_code( $response ) ) { return new WP_Error( 'yrs_update_http_error', '更新情報を取得できませんでした。' ); } $metadata = json_decode( wp_remote_retrieve_body( $response ), true ); if ( ! is_array( $metadata ) || empty( $metadata['version'] ) || empty( $metadata['download_url'] ) ) { return new WP_Error( 'yrs_update_invalid_json', '更新情報の形式が正しくありません。' ); } if ( ! self::is_allowed_update_url( $metadata['download_url'] ) ) { return new WP_Error( 'yrs_update_invalid_url', '更新ファイルの配布元が許可されていません。' ); } set_site_transient( self::UPDATE_CACHE_KEY, $metadata, 3 * HOUR_IN_SECONDS ); return $metadata; } private static function is_allowed_update_url( $url ) { $parts = wp_parse_url( $url ); if ( empty( $parts['scheme'] ) || 'https' !== strtolower( $parts['scheme'] ) || empty( $parts['host'] ) ) { return false; } $host = strtolower( $parts['host'] ); return in_array( $host, array( 'raw.githubusercontent.com', 'github.com', 'objects.githubusercontent.com' ), true ); } private static function is_allowed_download_url( $url ) { $parts = wp_parse_url( $url ); if ( empty( $parts['scheme'] ) || 'https' !== strtolower( $parts['scheme'] ) || empty( $parts['host'] ) ) { return false; } $host = strtolower( $parts['host'] ); return 'files.oaiusercontent.com' === $host || ( strlen( $host ) > strlen( '.oaiusercontent.com' ) && substr( $host, -strlen( '.oaiusercontent.com' ) ) === '.oaiusercontent.com' ); } private static function build_image_figure( $media_id ) { $src = wp_get_attachment_image_url( $media_id, 'large' ); $alt = get_post_meta( $media_id, '_wp_attachment_image_alt', true ); $caption = wp_get_attachment_caption( $media_id ); if ( ! $src ) { return ''; } $html = '<figure class="wp-block-image size-large">'; $html .= '<img src="' . esc_url( $src ) . '" alt="' . esc_attr( $alt ) . '" class="wp-image-' . absint( $media_id ) . '">'; if ( $caption ) { $html .= '<figcaption class="wp-element-caption">' . esc_html( $caption ) . '</figcaption>'; } $html .= '</figure>'; return $html; } } register_activation_hook( __FILE__, array( 'YRS_ChatGPT_Report_Plugin', 'activate' ) ); YRS_ChatGPT_Report_Plugin::init(); 
+ is_object( $transient ) ) {
+            $transient = new stdClass();
+        }
+        if ( empty( $transient->checked ) || ! is_array( $transient->checked ) ) {
+            return $transient;
+        }
+
+        $plugin_file = plugin_basename( __FILE__ );
+        $metadata = self::get_update_metadata();
+        if ( is_wp_error( $metadata ) || empty( $metadata['version'] ) || empty( $metadata['download_url'] ) ) {
+            return $transient;
+        }
+
+        $item = (object) array(
+            'id'           => self::UPDATE_REPO_URL,
+            'slug'         => self::UPDATE_SLUG,
+            'plugin'       => $plugin_file,
+            'new_version'  => sanitize_text_field( $metadata['version'] ),
+            'url'          => esc_url_raw( $metadata['homepage'] ?? self::UPDATE_REPO_URL ),
+            'package'      => esc_url_raw( $metadata['download_url'] ),
+            'tested'       => sanitize_text_field( $metadata['tested'] ?? '' ),
+            'requires_php' => sanitize_text_field( $metadata['requires_php'] ?? '7.4' ),
+            'requires'     => sanitize_text_field( $metadata['requires'] ?? '6.2' ),
+        );
+
+        if ( version_compare( self::PLUGIN_VERSION, $item->new_version, '<' ) ) {
+            if ( ! isset( $transient->response ) || ! is_array( $transient->response ) ) {
+                $transient->response = array();
+            }
+            $transient->response[ $plugin_file ] = $item;
+        } else {
+            if ( ! isset( $transient->no_update ) || ! is_array( $transient->no_update ) ) {
+                $transient->no_update = array();
+            }
+            $transient->no_update[ $plugin_file ] = $item;
+            if ( isset( $transient->response[ $plugin_file ] ) ) {
+                unset( $transient->response[ $plugin_file ] );
+            }
+        }
+        return $transient;
+    }
+
+    /**
+     * Populate the WordPress plugin details modal for this custom plugin.
+     */
+    public static function plugin_information( $result, $action, $args ) {
+        if ( 'plugin_information' !== $action || empty( $args->slug ) || self::UPDATE_SLUG !== $args->slug ) {
+            return $result;
+        }
+        $metadata = self::get_update_metadata();
+        if ( is_wp_error( $metadata ) ) {
+            return $result;
+        }
+
+        return (object) array(
+            'name'          => sanitize_text_field( $metadata['name'] ?? 'ゆる歴史散歩 ChatGPT レポート投稿' ),
+            'slug'          => self::UPDATE_SLUG,
+            'version'       => sanitize_text_field( $metadata['version'] ?? self::PLUGIN_VERSION ),
+            'author'        => '<a href="https://yuru-rekishi-sanpo.com/">ゆる歴史散歩会</a>',
+            'homepage'      => esc_url_raw( $metadata['homepage'] ?? self::UPDATE_REPO_URL ),
+            'requires'      => sanitize_text_field( $metadata['requires'] ?? '6.2' ),
+            'tested'        => sanitize_text_field( $metadata['tested'] ?? '' ),
+            'requires_php'  => sanitize_text_field( $metadata['requires_php'] ?? '7.4' ),
+            'download_link' => esc_url_raw( $metadata['download_url'] ?? '' ),
+            'sections'      => array(
+                'description' => wp_kses_post( $metadata['description'] ?? 'ChatGPTから散歩レポートをWordPressへ下書き投稿する専用プラグインです。' ),
+                'changelog'   => wp_kses_post( $metadata['changelog'] ?? '' ),
+            ),
+        );
+    }
+
+    public static function clear_update_cache_after_upgrade( $upgrader, $options ) {
+        if ( empty( $options['type'] ) || 'plugin' !== $options['type'] ) {
+            return;
+        }
+        delete_site_transient( self::UPDATE_CACHE_KEY );
+    }
+
+    public static function add_plugin_row_meta( $links, $plugin_file ) {
+        if ( plugin_basename( __FILE__ ) !== $plugin_file ) {
+            return $links;
+        }
+        $links[] = '<a href="' . esc_url( self::UPDATE_REPO_URL ) . '" target="_blank" rel="noopener noreferrer">更新元</a>';
+        return $links;
+    }
+
+    private static function get_update_metadata() {
+        $cached = get_site_transient( self::UPDATE_CACHE_KEY );
+        if ( is_array( $cached ) ) {
+            return $cached;
+        }
+
+        $response = wp_safe_remote_get(
+            self::UPDATE_METADATA_URL,
+            array(
+                'timeout' => 10,
+                'headers' => array(
+                    'Accept'     => 'application/json',
+                    'User-Agent' => 'WordPress/' . get_bloginfo( 'version' ) . '; ' . home_url( '/' ),
+                ),
+            )
+        );
+        if ( is_wp_error( $response ) ) {
+            return $response;
+        }
+        if ( 200 !== (int) wp_remote_retrieve_response_code( $response ) ) {
+            return new WP_Error( 'yrs_update_http_error', '更新情報を取得できませんでした。' );
+        }
+
+        $metadata = json_decode( wp_remote_retrieve_body( $response ), true );
+        if ( ! is_array( $metadata ) || empty( $metadata['version'] ) || empty( $metadata['download_url'] ) ) {
+            return new WP_Error( 'yrs_update_invalid_json', '更新情報の形式が正しくありません。' );
+        }
+        if ( ! self::is_allowed_update_url( $metadata['download_url'] ) ) {
+            return new WP_Error( 'yrs_update_invalid_url', '更新ファイルの配布元が許可されていません。' );
+        }
+
+        set_site_transient( self::UPDATE_CACHE_KEY, $metadata, 3 * HOUR_IN_SECONDS );
+        return $metadata;
+    }
+
+    private static function is_allowed_update_url( $url ) {
+        $parts = wp_parse_url( $url );
+        if ( empty( $parts['scheme'] ) || 'https' !== strtolower( $parts['scheme'] ) || empty( $parts['host'] ) ) {
+            return false;
+        }
+        $host = strtolower( $parts['host'] );
+        return in_array( $host, array( 'raw.githubusercontent.com', 'github.com', 'objects.githubusercontent.com' ), true );
+    }
+
+    private static function is_allowed_download_url( $url ) {
+        $parts = wp_parse_url( $url );
+        if ( empty( $parts['scheme'] ) || 'https' !== strtolower( $parts['scheme'] ) || empty( $parts['host'] ) ) {
+            return false;
+        }
+        $host = strtolower( $parts['host'] );
+        return 'files.oaiusercontent.com' === $host || ( strlen( $host ) > strlen( '.oaiusercontent.com' ) && substr( $host, -strlen( '.oaiusercontent.com' ) ) === '.oaiusercontent.com' );
+    }
+
+    private static function build_image_figure( $media_id ) {
+        $src     = wp_get_attachment_image_url( $media_id, 'large' );
+        $alt     = get_post_meta( $media_id, '_wp_attachment_image_alt', true );
+        $caption = wp_get_attachment_caption( $media_id );
+        if ( ! $src ) {
+            return '';
+        }
+        $html  = '<figure class="wp-block-image size-large">';
+        $html .= '<img src="' . esc_url( $src ) . '" alt="' . esc_attr( $alt ) . '" class="wp-image-' . absint( $media_id ) . '">';
+        if ( $caption ) {
+            $html .= '<figcaption class="wp-element-caption">' . esc_html( $caption ) . '</figcaption>';
+        }
+        $html .= '</figure>';
+        return $html;
+    }
+}
+
+register_activation_hook( __FILE__, array( 'YRS_ChatGPT_Report_Plugin', 'activate' ) );
+YRS_ChatGPT_Report_Plugin::init();
