@@ -1,0 +1,31 @@
+der ) ) { $updated_content = str_replace( $placeholder, $figure, $updated_content ); } } } $updated_content = preg_replace( '/\{\{IMAGE_\d+\}\}/', '', $updated_content ); wp_update_post( wp_slash( array( 'ID' => $post_id, 'post_content' => $updated_content, ) ) ); return rest_ensure_response( array( 'ok' => true, 'post_id' => $post_id, 'status' => get_post_status( $post_id ), 'author_id' => $author_id, 'author_name' => get_the_author_meta( 'display_name', $author_id ), 'media_ids' => $media_ids, 'administrative_maps' => $administrative_maps, 'edit_url' => admin_url( 'post.php?post=' . $post_id . '&action=edit' ), 'preview_url' => get_preview_post_link( $post_id ), 'permalink' => get_permalink( $post_id ), ) ); } private static function normalize_administrative_areas( $payload ) { $areas = array(); if ( ! empty( $payload['administrative_areas'] ) && is_array( $payload['administrative_areas'] ) ) { $areas = $payload['administrative_areas']; } elseif ( ! empty( $payload['administrative_area'] ) ) { $areas = array( $payload['administrative_area'] ); } $clean = array(); foreach ( array_slice( $areas, 0, 3 ) as $area ) { $area = sanitize_text_field( $area ); $area = preg_replace( '/[\x{3000}\s]+/u', '', $area ); if ( '' !== $area && ! in_array( $area, $clean, true ) ) { $clean[] = $area; } } return $clean; } private static function find_administrative_map( $administrative_area ) { global $wpdb; $area = sanitize_text_field( $administrative_area ); $area = preg_replace( '/[\x{3000}\s]+/u', '', $area ); if ( '' === $area ) { return array( 'area' => '', 'found' => false, 'media_id'=> 0, 'title' => '', 'url' => '', 'message' => '行政区域名が空です。', ); } $short = preg_replace( '/^(東京都|北海道|京都府|大阪府|.{2,3}県)/u', '', $area ); if ( '' === $short ) { $short = $area; } $like_area = '%' . $wpdb->esc_like( $area ) . '%'; $like_short = '%' . $wpdb->esc_like( $short ) . '%'; $like_map = '%' . $wpdb->esc_like( '行政地図' ) . '%'; $like_map2 = '%' . $wpdb->esc_like( '行政図' ) . '%'; $sql = $wpdb->prepare( "SELECT DISTINCT p.ID
+             FROM {$wpdb->posts} p
+             LEFT JOIN {$wpdb->postmeta} pm
+               ON p.ID = pm.post_id AND pm.meta_key = '_wp_attached_file'
+             WHERE p.post_type = 'attachment'
+               AND p.post_status = 'inherit'
+               AND p.post_mime_type LIKE 'image/%%'
+               AND (
+                    p.post_title LIKE %s OR p.post_name LIKE %s OR pm.meta_value LIKE %s
+                    OR p.post_title LIKE %s OR p.post_name LIKE %s OR pm.meta_value LIKE %s
+               )
+               AND (
+                    p.post_title LIKE %s OR p.post_name LIKE %s OR pm.meta_value LIKE %s
+                    OR p.post_title LIKE %s OR p.post_name LIKE %s OR pm.meta_value LIKE %s
+               )
+             ORDER BY p.post_date DESC
+             LIMIT 100", $like_area, $like_area, $like_area, $like_short, $like_short, $like_short, $like_map, $like_map, $like_map, $like_map2, $like_map2, $like_map2 ); $ids = $wpdb->get_col( $sql ); if ( empty( $ids ) ) { $like_plain_map = '%' . $wpdb->esc_like( '地図' ) . '%'; $sql = $wpdb->prepare( "SELECT DISTINCT p.ID
+                 FROM {$wpdb->posts} p
+                 LEFT JOIN {$wpdb->postmeta} pm
+                   ON p.ID = pm.post_id AND pm.meta_key = '_wp_attached_file'
+                 WHERE p.post_type = 'attachment'
+                   AND p.post_status = 'inherit'
+                   AND p.post_mime_type LIKE 'image/%%'
+                   AND (
+                        p.post_title LIKE %s OR p.post_name LIKE %s OR pm.meta_value LIKE %s
+                   )
+                   AND (
+                        p.post_title LIKE %s OR p.post_name LIKE %s OR pm.meta_value LIKE %s
+                   )
+                 ORDER BY p.post_date DESC
+                 LIMIT 100", $like_short, $like_short, $like_short, $like_plain_map, $like_plain_map, $like_plain_map ); $ids = $wpdb->get_col( $sql ); } $best_id = 0; $best_score = -1; $target_exact = self::normalize_map_text( $area . '行政地図' ); $target_short = self::normalize_map_text( $short . '行政地図' ); foreach ( $ids as $id ) { $id = absint( $id ); $title = get_the_title( $id ); $slug = get_post_field( 'post_name', $id ); $attached = get_post_meta( $id, '_wp_attached_file', true ); $basename = $attached ? pathinfo( rawurldecode( wp_basename( $attached ) ), PATHINFO_FILENAME ) : ''; $values = array( self::normalize_map_text( $title ), self::normalize_map_text( $slug ), self::normalize_map_text( $basename ), ); $score = 0; foreach ( $values as $value ) { if ( '' === $value ) { continue; } if ( $value === $target_exact ) { $score = max( $score, 120 ); } if ( $value === $target_short ) { $score = max( $score, 110 ); } if ( false !== mb_strpos( $value, self::normalize_map_text( $area ) ) && false !== mb_strpos( $value, '行政地図' ) ) { $score = max( $score, 100 ); } if ( false !== mb_strpos( $value, self::normalize_map_text( $short ) ) 

@@ -1,0 +1,46 @@
+/p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="yrs-category">既定カテゴリー</label></th>
+                        <td>
+                            <select id="yrs-category" name="<?php echo esc_attr( self::OPTION_KEY ); ?>[category_id]">
+                                <option value="0">未指定</option>
+                                <?php foreach ( $categories as $category ) : ?>
+                                    <option value="<?php echo esc_attr( $category->term_id ); ?>" <?php selected( absint( $settings['category_id'] ?? 0 ), $category->term_id ); ?>>
+                                        <?php echo esc_html( $category->name ); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                            <p class="description">通常は「イベント」を選択してください。</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">APIキー</th>
+                        <td>
+                            <input type="text" readonly class="regular-text code" value="<?php echo esc_attr( $settings['api_key'] ?? '' ); ?>" onclick="this.select();">
+                            <p class="description">このキーはカスタムGPTの認証設定にだけ入力します。チャット本文には貼らないでください。</p>
+                            <label><input type="checkbox" name="<?php echo esc_attr( self::OPTION_KEY ); ?>[regenerate_key]" value="1"> 保存時にAPIキーを再発行する</label>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">自動公開</th>
+                        <td>
+                            <label>
+                                <input type="checkbox" name="<?php echo esc_attr( self::OPTION_KEY ); ?>[allow_publish]" value="1" <?php checked( ! empty( $settings['allow_publish'] ) ); ?>>
+                                ChatGPTからの公開投稿を許可する
+                            </label>
+                            <p class="description"><strong>最初はチェックしないでください。</strong> チェックしない場合は、公開を指定されても下書きになります。</p>
+                        </td>
+                    </tr>
+                </table>
+                <?php submit_button( '設定を保存' ); ?>
+            </form>
+
+            <hr>
+            <h2>接続先</h2>
+            <p><code><?php echo esc_html( rest_url( self::REST_NS . '/status' ) ); ?></code></p>
+            <p><code><?php echo esc_html( rest_url( self::REST_NS . '/create' ) ); ?></code></p>
+        </div>
+        <?php
+ } public static function register_routes() { register_rest_route( self::REST_NS, '/status', array( 'methods' => WP_REST_Server::READABLE, 'callback' => array( __CLASS__, 'status' ), 'permission_callback' => array( __CLASS__, 'authorize' ), ) ); register_rest_route( self::REST_NS, '/administrative-map', array( 'methods' => WP_REST_Server::READABLE, 'callback' => array( __CLASS__, 'administrative_map' ), 'permission_callback' => array( __CLASS__, 'authorize' ), 'args' => array( 'administrative_area' => array( 'required' => true, 'sanitize_callback' => 'sanitize_text_field', ), ), ) ); register_rest_route( self::REST_NS, '/create', array( 'methods' => WP_REST_Server::CREATABLE, 'callback' => array( __CLASS__, 'create_report' ), 'permission_callback' => array( __CLASS__, 'authorize' ), ) ); } public static function authorize( WP_REST_Request $request ) { $settings = get_option( self::OPTION_KEY, array() ); $stored = (string) ( $settings['api_key'] ?? '' ); if ( '' === $stored ) { return new WP_Error( 'yrs_no_api_key', 'APIキーが設定されていません。', array( 'status' => 503 ) ); } $header = (string) $request->get_header( 'authorization' ); if ( ! preg_match( '/^Bearer\s+(.+)$/i', $header, $matches ) ) { return new WP_Error( 'yrs_missing_auth', 'Bearer認証が必要です。', array( 'status' => 401 ) ); } $provided = trim( $matches[1] ); if ( ! hash_equals( $stored, $provided ) ) { return new WP_Error( 'yrs_bad_auth', 'APIキーが正しくありません。', array( 'status' => 403 ) ); } return true; } public static function status() { $settings = get_option( self::OPTION_KEY, array() ); $author = get_user_by( 'id', absint( $settings['author_id'] ?? 0 ) ); $category = get_term( absint( $settings['category_id'] ?? 0 ), 'category' ); return rest_ensure_response( array( 'ok' => true, 'site_name' => get_bloginfo( 'name' ), 'author' => $author ? $author->display_name : '', 'category' => ( $category && ! is_wp_error( $category ) ) ? $category->name : '', 'allow_publish' => ! empty( $settings['allow_publish'] ), 'max_images' => self::MAX_FILES, 'accepted_mimes' => array( 'image/jpeg', 'image/png', 'image/webp
