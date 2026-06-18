@@ -1,1 +1,158 @@
-} $upload_path = $save_result['path']; } $file_array = array( 'name' => $filename, 'tmp_name' => $upload_path, ); $caption = sanitize_text_field( $image_meta['caption'] ?? '' ); $media_id = media_handle_sideload( $file_array, $post_id, $caption ); if ( is_wp_error( $media_id ) ) { @unlink( $upload_path ); return $media_id; } if ( 'image/webp' !== get_post_mime_type( $media_id ) ) { wp_delete_attachment( $media_id, true ); return new WP_Error( 'yrs_registered_not_webp', 'WordPressが画像をWebPとして登録しなかったため、画像を削除して処理を中止しました。' ); } $alt = sanitize_text_field( $image_meta['alt'] ?? '' ); if ( '' !== $alt ) { update_post_meta( $media_id, '_wp_attachment_image_alt', $alt ); } if ( '' !== $caption ) { wp_update_post( array( 'ID' => $media_id, 'post_excerpt' => $caption, ) ); } return $media_id; } public static function maybe_enable_auto_updates() { $flag = 'yrs_chatgpt_report_auto_update_opted_in'; if ( get_option( $flag ) ) { return; } $plugin_file = plugin_basename( __FILE__ ); $enabled = get_site_option( 'auto_update_plugins', array() ); if ( ! is_array( $enabled ) ) { $enabled = array(); } if ( ! in_array( $plugin_file, $enabled, true ) ) { $enabled[] = $plugin_file; update_site_option( 'auto_update_plugins', array_values( array_unique( $enabled ) ) ); } update_option( $flag, 1, false ); } public static function inject_plugin_update( $transient ) { if ( ! is_object( $transient ) ) { $transient = new stdClass(); } if ( empty( $transient->checked ) || ! is_array( $transient->checked ) ) { return $transient; } $plugin_file = plugin_basename( __FILE__ ); $metadata = self::get_update_metadata(); if ( is_wp_error( $metadata ) || empty( $metadata['version'] ) || empty( $metadata['download_url'] ) ) { return $transient; } $item = (object) array( 'id' => self::UPDATE_REPO_URL, 'slug' => self::UPDATE_SLUG, 'plugin' => $plugin_file, 'new_version' => sanitize_text_field( $metadata['version'] ), 'url' => esc_url_raw( $metadata['homepage'] ?? self::UPDATE_REPO_URL ), 'package' => esc_url_raw( $metadata['download_url'] ), 'tested' => sanitize_text_field( $metadata['tested'] ?? '' ), 'requires_php' => sanitize_text_field( $metadata['requires_php'] ?? '7.4' ), 'requires' => sanitize_text_field( $metadata['requires'] ?? '6.2' ), ); if ( version_compare( self::PLUGIN_VERSION, $item->new_version, '<' ) ) { if ( ! isset( $transient->response ) || ! is_array( $transient->response ) ) { $transient->response = array(); } $transient->response[ $plugin_file ] = $item; } else { if ( ! isset( $transient->no_update ) || ! is_array( $transient->no_update ) ) { $transient->no_update = array(); } $transient->no_update[ $plugin_file ] = $item; if ( isset( $transient->response[ $plugin_file ] ) ) { unset( $transient->response[ $plugin_file ] ); } } return $transient; } public static function plugin_information( $result, $action, $args ) { if ( 'plugin_information' !== $action || empty( $args->slug ) || self::UPDATE_SLUG !== $args->slug ) { return $result; } $metadata = self::get_update_metadata(); if ( is_wp_error( $metadata ) ) { return $result; } return (object) array( 'name' => sanitize_text_field( $metadata['name'] ?? 'ゆる歴史散歩 ChatGPT レポート投稿' ), 'slug' => self::UPDATE_SLUG, 'version' => sanitize_text_field( $metadata['version'] ?? self::PLUGIN_VERSION ), 'author' => '<a href="https://yuru-rekishi-sanpo.com/">ゆる歴史散歩会</a>', 'homepage' => esc_url_raw( $metadata['homepage'] ?? self::UPDATE_REPO_URL ), 'requires' => sanitize_text_field( $metadata['requires'] ?? '6.2' ), 'tested' => sanitize_text_field( $metadata['tested'] ?? '' ), 'requires_php' => sanitize_text_field( $metadata['requires_php'] ?? '7.4' ), 'download_link' => esc_url_raw( $metadata['download_url'] ?? '' ), 'sections' => array( 'description' => wp_kses_post( $metadata['description'] ?? 'ChatGPTから散歩レポートをWordPressへ下書き投稿する専用プラグインです。' ), 'changelog' => wp_kses_post( $metadata['changelog'] ?? '' ), ), ); } public static function clear_update_cache_after_upgrade( $upgrader, $options ) { if ( empty( $options['type'] ) || 'plugin' !== $options['type'] ) { return; } delete_site_transient( self::UPDATE_CACHE_KEY ); } public static function add_plugin_row_meta( $links, $plugin_file ) { if ( plugin_basename( __FILE__ ) !== $plugin_file ) { return $links; } $links[] = '<a href="' . esc_url( self::UPDATE_REPO_URL ) . '" target="_blank" rel="noopener noreferrer">更新元</a>'; return $links; } private static function get_update_metadata() { $cached = get_site_transient( self::UPDATE_CACHE_KEY ); if ( is_array( $cached ) ) { return $cached; } $response = wp_safe_remote_get( self::UPDATE_METADATA_URL, array( 'timeout' => 10, 'headers' => array( 'Accept' => 'application/json', 'User-Agent' => 'WordPress/' . get_bloginfo( 'version' ) . '; ' . home_url( '/' ), ), ) ); if ( is_wp_error( $response ) ) { return $response; } if ( 200 !== (int) wp_remot
+bsint( $index ) + 1 ), 2, '0', STR_PAD_LEFT );
+        $filename = sanitize_file_name( $post_slug . '-' . $sequence . '.webp' );
+
+        $upload_path = $tmp_original;
+
+        if ( 'image/webp' === $actual_mime ) {
+            // The GPT should normally send a ready-to-use WebP. Avoid needless re-encoding.
+            $dimensions = @getimagesize( $tmp_original );
+            if ( is_array( $dimensions ) && ( $dimensions[0] > self::MAX_IMAGE_DIMENSION || $dimensions[1] > self::MAX_IMAGE_DIMENSION ) ) {
+                if ( ! wp_image_editor_supports( array( 'mime_type' => 'image/webp' ) ) ) {
+                    @unlink( $tmp_original );
+                    return new WP_Error(
+                        'yrs_webp_resize_unsupported',
+                        'WebP画像が長辺1920pxを超えていますが、サーバー側でWebPを縮小できません。GPT側で長辺1920px以下のWebPにしてから再送してください。'
+                    );
+                }
+
+                $editor = wp_get_image_editor( $tmp_original );
+                if ( is_wp_error( $editor ) ) {
+                    @unlink( $tmp_original );
+                    return new WP_Error( 'yrs_image_editor_error', 'WebP画像を開けませんでした: ' . $editor->get_error_message() );
+                }
+
+                $resize_result = $editor->resize( self::MAX_IMAGE_DIMENSION, self::MAX_IMAGE_DIMENSION, false );
+                if ( is_wp_error( $resize_result ) ) {
+                    @unlink( $tmp_original );
+                    return new WP_Error( 'yrs_image_resize_error', 'WebP画像の縮小に失敗しました: ' . $resize_result->get_error_message() );
+                }
+
+                $editor->set_quality( self::WEBP_QUALITY );
+                $tmp_dir     = get_temp_dir();
+                $tmp_resized = trailingslashit( $tmp_dir ) . wp_unique_filename( $tmp_dir, $filename );
+                $save_result = $editor->save( $tmp_resized, 'image/webp' );
+                @unlink( $tmp_original );
+
+                if ( is_wp_error( $save_result ) || empty( $save_result['path'] ) || ! file_exists( $save_result['path'] ) ) {
+                    @unlink( $tmp_resized );
+                    $message = is_wp_error( $save_result ) ? $save_result->get_error_message() : '変換後ファイルがありません。';
+                    return new WP_Error( 'yrs_webp_resize_error', 'WebP画像の縮小保存に失敗しました: ' . $message );
+                }
+
+                if ( 'image/webp' !== wp_get_image_mime( $save_result['path'] ) ) {
+                    @unlink( $save_result['path'] );
+                    return new WP_Error( 'yrs_not_real_webp', '縮小後の画像が実際のWebP形式ではありませんでした。' );
+                }
+
+                $upload_path = $save_result['path'];
+            }
+        } else {
+            // JPEG/PNG input must be converted to a real WebP. Never silently upload it as JPEG/PNG.
+            if ( ! wp_image_editor_supports( array( 'mime_type' => 'image/webp' ) ) ) {
+                @unlink( $tmp_original );
+                return new WP_Error(
+                    'yrs_webp_conversion_unsupported',
+                    'このサーバーのWordPress画像処理ではJPEG/PNGをWebPへ変換できません。GPT側でWebPへ変換した画像を送信してください。'
+                );
+            }
+
+            $editor = wp_get_image_editor( $tmp_original );
+            if ( is_wp_error( $editor ) ) {
+                @unlink( $tmp_original );
+                return new WP_Error( 'yrs_image_editor_error', '画像変換を開始できませんでした: ' . $editor->get_error_message() );
+            }
+
+            $dimensions = $editor->get_size();
+            if ( is_array( $dimensions ) && ( $dimensions['width'] > self::MAX_IMAGE_DIMENSION || $dimensions['height'] > self::MAX_IMAGE_DIMENSION ) ) {
+                $resize_result = $editor->resize( self::MAX_IMAGE_DIMENSION, self::MAX_IMAGE_DIMENSION, false );
+                if ( is_wp_error( $resize_result ) ) {
+                    @unlink( $tmp_original );
+                    return new WP_Error( 'yrs_image_resize_error', '画像の縮小に失敗しました: ' . $resize_result->get_error_message() );
+                }
+            }
+
+            $editor->set_quality( self::WEBP_QUALITY );
+            $tmp_dir  = get_temp_dir();
+            $tmp_webp = trailingslashit( $tmp_dir ) . wp_unique_filename( $tmp_dir, $filename );
+            $save_result = $editor->save( $tmp_webp, 'image/webp' );
+            @unlink( $tmp_original );
+
+            if ( is_wp_error( $save_result ) || empty( $save_result['path'] ) || ! file_exists( $save_result['path'] ) ) {
+                @unlink( $tmp_webp );
+                $message = is_wp_error( $save_result ) ? $save_result->get_error_message() : '変換後ファイルがありません。';
+                return new WP_Error( 'yrs_webp_conversion_error', 'WebPへの変換に失敗しました: ' . $message );
+            }
+
+            if ( 'image/webp' !== wp_get_image_mime( $save_result['path'] ) ) {
+                @unlink( $save_result['path'] );
+                return new WP_Error(
+                    'yrs_not_real_webp',
+                    'サーバーがWebP変換要求をJPEG/PNGとして保存したため、画像の登録を中止しました。GPT側でWebPへ変換した画像を送信してください。'
+                );
+            }
+
+            $upload_path = $save_result['path'];
+        }
+
+        $file_array = array(
+            'name'     => $filename,
+            'tmp_name' => $upload_path,
+        );
+
+        $caption  = sanitize_text_field( $image_meta['caption'] ?? '' );
+        $media_id = media_handle_sideload( $file_array, $post_id, $caption );
+        if ( is_wp_error( $media_id ) ) {
+            @unlink( $upload_path );
+            return $media_id;
+        }
+
+        // Final guard: WordPress must have registered this attachment as WebP.
+        if ( 'image/webp' !== get_post_mime_type( $media_id ) ) {
+            wp_delete_attachment( $media_id, true );
+            return new WP_Error( 'yrs_registered_not_webp', 'WordPressが画像をWebPとして登録しなかったため、画像を削除して処理を中止しました。' );
+        }
+
+        $alt = sanitize_text_field( $image_meta['alt'] ?? '' );
+        if ( '' !== $alt ) {
+            update_post_meta( $media_id, '_wp_attachment_image_alt', $alt );
+        }
+        if ( '' !== $caption ) {
+            wp_update_post(
+                array(
+                    'ID'           => $media_id,
+                    'post_excerpt' => $caption,
+                )
+            );
+        }
+
+        return $media_id;
+    }
+
+
+    /**
+     * Opt this plugin in to WordPress automatic updates once.
+     * The user can still disable auto-updates later from the Plugins screen.
+     */
+    public static function maybe_enable_auto_updates() {
+        $flag = 'yrs_chatgpt_report_auto_update_opted_in';
+        if ( get_option( $flag ) ) {
+            return;
+        }
+
+        $plugin_file = plugin_basename( __FILE__ );
+        $enabled = get_site_option( 'auto_update_plugins', array() );
+        if ( ! is_array( $enabled ) ) {
+            $enabled = array();
+        }
+        if ( ! in_array( $plugin_file, $enabled, true ) ) {
+            $enabled[] = $plugin_file;
+            update_site_option( 'auto_update_plugins', array_values( array_unique( $enabled ) ) );
+        }
+        update_option( $flag, 1, false );
+    }
+
+    /**
+     * Add updates from the dedicated public GitHub repository.
+     */
+    public static function inject_plugin_update( $transient ) {
+        if ( !
