@@ -2,14 +2,114 @@
 /**
  * Plugin Name: ゆる歴史散歩 ChatGPT レポート投稿
  * Description: 非公開カスタムGPTから、画像付き散歩レポートを安全に下書き投稿します。投稿者・カテゴリー・APIキーを管理画面で設定できます。
- * Version: 1.4.0
+ * Version: 1.5.1
  * Update URI: https://github.com/tsu58-rgb/yuru-report-chatgpt-plugin
  * Author: ゆる歴史散歩会
  * Requires at least: 6.2
  * Requires PHP: 7.4
  */
 
- if ( ! defined( 'ABSPATH' ) ) { exit; } final class YRS_ChatGPT_Report_Plugin { const OPTION_KEY = 'yrs_chatgpt_report_settings'; const REST_NS = 'yuru-report/v1'; const MAX_FILES = 10; const MAX_BYTES = 10485760; const MAX_IMAGE_DIMENSION = 1920; const WEBP_QUALITY = 82; const PLUGIN_VERSION = '1.4.0'; const UPDATE_SLUG = 'yuru-report-chatgpt'; const UPDATE_REPO_URL = 'https://github.com/tsu58-rgb/yuru-report-chatgpt-plugin'; const UPDATE_METADATA_URL = 'https://raw.githubusercontent.com/tsu58-rgb/yuru-report-chatgpt-plugin/main/update-info.json'; const UPDATE_CACHE_KEY = 'yrs_chatgpt_report_update_metadata'; public static function init() { add_action( 'admin_menu', array( __CLASS__, 'add_settings_page' ) ); add_action( 'admin_init', array( __CLASS__, 'register_settings' ) ); add_action( 'rest_api_init', array( __CLASS__, 'register_routes' ) ); add_action( 'admin_init', array( __CLASS__, 'maybe_enable_auto_updates' ) ); add_filter( 'pre_set_site_transient_update_plugins', array( __CLASS__, 'inject_plugin_update' ) ); add_filter( 'plugins_api', array( __CLASS__, 'plugin_information' ), 20, 3 ); add_action( 'upgrader_process_complete', array( __CLASS__, 'clear_update_cache_after_upgrade' ), 10, 2 ); add_filter( 'plugin_row_meta', array( __CLASS__, 'add_plugin_row_meta' ), 10, 2 ); } public static function activate() { $settings = get_option( self::OPTION_KEY, array() ); if ( empty( $settings['api_key'] ) ) { $settings['api_key'] = wp_generate_password( 64, false, false ); } if ( empty( $settings['author_id'] ) ) { $settings['author_id'] = get_current_user_id(); } if ( ! isset( $settings['category_id'] ) ) { $settings['category_id'] = 0; } if ( ! isset( $settings['allow_publish'] ) ) { $settings['allow_publish'] = 0; } update_option( self::OPTION_KEY, $settings, false ); } public static function add_settings_page() { add_options_page( 'ChatGPT レポート投稿', 'ChatGPT レポート投稿', 'manage_options', 'yrs-chatgpt-report', array( __CLASS__, 'render_settings_page' ) ); } public static function register_settings() { register_setting( 'yrs_chatgpt_report_group', self::OPTION_KEY, array( 'type' => 'array', 'sanitize_callback' => array( __CLASS__, 'sanitize_settings' ), 'default' => array(), ) ); } public static function sanitize_settings( $input ) { $old = get_option( self::OPTION_KEY, array() ); $out = array(); $out['author_id'] = isset( $input['author_id'] ) ? absint( $input['author_id'] ) : absint( $old['author_id'] ?? 0 ); $out['category_id'] = isset( $input['category_id'] ) ? absint( $input['category_id'] ) : absint( $old['category_id'] ?? 0 ); $out['allow_publish'] = ! empty( $input['allow_publish'] ) ? 1 : 0; if ( ! empty( $input['regenerate_key'] ) ) { $out['api_key'] = wp_generate_password( 64, false, false ); } else { $out['api_key'] = sanitize_text_field( $old['api_key'] ?? '' ); if ( empty( $out['api_key'] ) ) { $out['api_key'] = wp_generate_password( 64, false, false ); } } return $out; } public static function render_settings_page() { if ( ! current_user_can( 'manage_options' ) ) { return; } $settings = get_option( self::OPTION_KEY, array() ); $users = get_users( array( 'orderby' => 'display_name', 'order' => 'ASC', ) ); $categories = get_categories( array( 'hide_empty' => false ) ); ?>
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
+final class YRS_ChatGPT_Report_Plugin {
+    const OPTION_KEY = 'yrs_chatgpt_report_settings';
+    const REST_NS    = 'yuru-report/v1';
+    const MAX_FILES  = 10;
+    const MAX_BYTES  = 10485760; // 10 MB per image.
+    const MAX_IMAGE_DIMENSION = 1920;
+    const WEBP_QUALITY = 82;
+    const PLUGIN_VERSION = '1.5.1';
+    const UPDATE_SLUG = 'yuru-report-chatgpt';
+    const UPDATE_REPO_URL = 'https://github.com/tsu58-rgb/yuru-report-chatgpt-plugin';
+    const UPDATE_METADATA_URL = 'https://raw.githubusercontent.com/tsu58-rgb/yuru-report-chatgpt-plugin/main/update-info.json';
+    const UPDATE_CACHE_KEY = 'yrs_chatgpt_report_update_metadata';
+
+    public static function init() {
+        add_action( 'admin_menu', array( __CLASS__, 'add_settings_page' ) );
+        add_action( 'admin_init', array( __CLASS__, 'register_settings' ) );
+        add_action( 'rest_api_init', array( __CLASS__, 'register_routes' ) );
+        add_action( 'admin_init', array( __CLASS__, 'maybe_enable_auto_updates' ) );
+        add_filter( 'pre_set_site_transient_update_plugins', array( __CLASS__, 'inject_plugin_update' ) );
+        add_filter( 'plugins_api', array( __CLASS__, 'plugin_information' ), 20, 3 );
+        add_action( 'upgrader_process_complete', array( __CLASS__, 'clear_update_cache_after_upgrade' ), 10, 2 );
+        add_filter( 'plugin_row_meta', array( __CLASS__, 'add_plugin_row_meta' ), 10, 2 );
+    }
+
+    public static function activate() {
+        $settings = get_option( self::OPTION_KEY, array() );
+        if ( empty( $settings['api_key'] ) ) {
+            $settings['api_key'] = wp_generate_password( 64, false, false );
+        }
+        if ( empty( $settings['author_id'] ) ) {
+            $settings['author_id'] = get_current_user_id();
+        }
+        if ( ! isset( $settings['category_id'] ) ) {
+            $settings['category_id'] = 0;
+        }
+        if ( ! isset( $settings['allow_publish'] ) ) {
+            $settings['allow_publish'] = 0;
+        }
+        update_option( self::OPTION_KEY, $settings, false );
+    }
+
+    public static function add_settings_page() {
+        add_options_page(
+            'ChatGPT レポート投稿',
+            'ChatGPT レポート投稿',
+            'manage_options',
+            'yrs-chatgpt-report',
+            array( __CLASS__, 'render_settings_page' )
+        );
+    }
+
+    public static function register_settings() {
+        register_setting(
+            'yrs_chatgpt_report_group',
+            self::OPTION_KEY,
+            array(
+                'type'              => 'array',
+                'sanitize_callback' => array( __CLASS__, 'sanitize_settings' ),
+                'default'           => array(),
+            )
+        );
+    }
+
+    public static function sanitize_settings( $input ) {
+        $old = get_option( self::OPTION_KEY, array() );
+        $out = array();
+
+        $out['author_id']     = isset( $input['author_id'] ) ? absint( $input['author_id'] ) : absint( $old['author_id'] ?? 0 );
+        $out['category_id']   = isset( $input['category_id'] ) ? absint( $input['category_id'] ) : absint( $old['category_id'] ?? 0 );
+        $out['allow_publish'] = ! empty( $input['allow_publish'] ) ? 1 : 0;
+
+        if ( ! empty( $input['regenerate_key'] ) ) {
+            $out['api_key'] = wp_generate_password( 64, false, false );
+        } else {
+            $out['api_key'] = sanitize_text_field( $old['api_key'] ?? '' );
+            if ( empty( $out['api_key'] ) ) {
+                $out['api_key'] = wp_generate_password( 64, false, false );
+            }
+        }
+
+        return $out;
+    }
+
+    public static function render_settings_page() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            return;
+        }
+
+        $settings = get_option( self::OPTION_KEY, array() );
+        $users    = get_users(
+            array(
+                'orderby' => 'display_name',
+                'order'   => 'ASC',
+            )
+        );
+        $categories = get_categories( array( 'hide_empty' => false ) );
+        ?>
         <div class="wrap">
             <h1>ChatGPT レポート投稿</h1>
             <p>ChatGPTからの記事は、初期設定では必ず下書きとして作成されます。</p>
@@ -26,4 +126,30 @@
                                     </option>
                                 <?php endforeach; ?>
                             </select>
-                            <p class="description">ここで「なかまつ」を選ぶと、記事ページの投稿者も「なかまつ」になります。<
+                            <p class="description">ここで「なかまつ」を選ぶと、記事ページの投稿者も「なかまつ」になります。</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="yrs-category">既定カテゴリー</label></th>
+                        <td>
+                            <select id="yrs-category" name="<?php echo esc_attr( self::OPTION_KEY ); ?>[category_id]">
+                                <option value="0">未指定</option>
+                                <?php foreach ( $categories as $category ) : ?>
+                                    <option value="<?php echo esc_attr( $category->term_id ); ?>" <?php selected( absint( $settings['category_id'] ?? 0 ), $category->term_id ); ?>>
+                                        <?php echo esc_html( $category->name ); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                            <p class="description">通常は「イベント」を選択してください。</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">APIキー</th>
+                        <td>
+                            <input type="text" readonly class="regular-text code" value="<?php echo esc_attr( $settings['api_key'] ?? '' ); ?>" onclick="this.select();">
+                            <p class="description">このキーはカスタムGPTの認証設定にだけ入力します。チャット本文には貼らないでください。</p>
+                            <label><input type="checkbox" name="<?php echo esc_attr( self::OPTION_KEY ); ?>[regenerate_key]" value="1"> 保存時にAPIキーを再発行する</label>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"
