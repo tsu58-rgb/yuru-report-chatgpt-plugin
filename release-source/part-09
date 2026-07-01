@@ -1,0 +1,20 @@
+
+add_filter( 'rest_request_after_callbacks', function( $response, $handler, $request ) {
+    if ( is_wp_error( $response ) ) return $response;
+    $route = (string) $request->get_route();
+    if ( '/yuru-report/v1/create' !== $route && ! preg_match( '#^/yuru-report/v1/posts/\d+$#', $route ) ) return $response;
+    $rest = rest_ensure_response( $response );
+    $data = $rest->get_data();
+    $post_id = is_array( $data ) ? absint( $data['post_id'] ?? 0 ) : 0;
+    if ( ! $post_id ) return $response;
+    $categories = array_map( 'absint', wp_get_post_categories( $post_id ) );
+    $data['categories'] = $categories;
+    $data['required_category_ids'] = array( 1, 44 );
+    $data['category_enforced'] = in_array( 1, $categories, true ) && in_array( 44, $categories, true );
+    $data['reports_listing_url'] = home_url( '/reports/' );
+    $data['reports_listed'] = 'publish' === get_post_status( $post_id ) && in_array( 44, $categories, true );
+    $data['featured_media_exists'] = has_post_thumbnail( $post_id );
+    $data['excerpt_exists'] = '' !== trim( (string) get_post_field( 'post_excerpt', $post_id ) );
+    $rest->set_data( $data );
+    return $rest;
+}, 30, 3 );
