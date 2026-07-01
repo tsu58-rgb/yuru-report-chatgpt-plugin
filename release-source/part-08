@@ -1,0 +1,10 @@
+
+add_action( 'save_post_post', function( $post_id, $post, $update ) {
+    if ( wp_is_post_revision( $post_id ) || false === mb_strpos( (string) $post->post_title, '開催レポート' ) ) {
+        return;
+    }
+    $categories = wp_get_post_categories( $post_id );
+    $categories[] = 1;
+    $categories[] = 44;
+    wp_set_post_categories( $post_id, array_values( array_unique( array_map( 'absint', $categories ) ) ), false );
+}, 20, 3 );
