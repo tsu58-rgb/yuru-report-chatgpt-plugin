@@ -2,7 +2,7 @@
 /**
  * Plugin Name: ゆる歴史散歩 ChatGPT レポート投稿
  * Description: 非公開カスタムGPTから、画像付き散歩レポートを安全に下書き投稿します。
- * Version: 1.5.1
+ * Version: 1.5.2
  * Update URI: https://github.com/tsu58-rgb/yuru-report-chatgpt-plugin
  * Author: ゆる歴史散歩会
  * Requires at least: 6.2
@@ -78,3 +78,8 @@ for ( $yrs_index = 0; $yrs_index < 8; $yrs_index++ ) {
 $yrs_source = preg_replace( '/^\xEF\xBB\xBF?\s*<\?php\s*/', '', $yrs_source, 1 );
 $yrs_source = str_replace( '__FILE__', 'YRS_CHATGPT_REPORT_PLUGIN_FILE', $yrs_source );
 eval( $yrs_source );
+
+$yrs_fixed_pages = __DIR__ . '/fixed-pages.php';
+if ( is_readable( $yrs_fixed_pages ) ) {
+    require_once $yrs_fixed_pages;
+}
